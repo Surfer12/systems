@@ -1,0 +1,269 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gemini-api
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gemini-api-secret
+  namespace: gemini-api
+type: Opaque
+data:
+  # Base64 encoded API key - replace with actual encoded key
+  api-key: ""
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gemini-config
+  namespace: gemini-api
+data:
+  REQUIRED_DIRS: "/app/data /app/logs /app/cache /tmp/gemini_api"
+  DEFAULT_PERMS: "755"
+  MAX_RETRIES: "5"
+  BASE_RETRY_DELAY: "15.0"
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gemini-data-pvc
+  namespace: gemini-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gemini-logs-pvc
+  namespace: gemini-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gemini-api-handler
+  namespace: gemini-api
+  labels:
+    app: gemini-api-handler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gemini-api-handler
+  template:
+    metadata:
+      labels:
+        app: gemini-api-handler
+    spec:
+      # Initialize directories with proper permissions
+      initContainers:
+      - name: init-directories
+        image: busybox:1.35
+        command: ["/bin/sh"]
+        args:
+          - -c
+          - |
+            echo "🚀 Initializing directories for Gemini API Handler..."
+            
+            # Create all required directories
+            for dir in /app/data /app/logs /app/cache /tmp/gemini_api; do
+              echo "📁 Creating $dir"
+              mkdir -p "$dir"
+              chmod 755 "$dir"
+              
+              # Test write access
+              if touch "$dir/.test" 2>/dev/null; then
+                rm -f "$dir/.test"
+                echo "✅ $dir is writable"
+              else
+                echo "❌ $dir is NOT writable"
+                exit 1
+              fi
+            done
+            
+            echo "✅ Directory initialization complete"
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+        volumeMounts:
+        - name: gemini-data
+          mountPath: /app/data
+        - name: gemini-logs
+          mountPath: /app/logs
+        - name: gemini-cache
+          mountPath: /app/cache
+        - name: tmp-volume
+          mountPath: /tmp/gemini_api
+
+      containers:
+      - name: gemini-api-handler
+        image: your-registry/gemini-api-handler:latest
+        imagePullPolicy: Always
+        
+        # Environment variables
+        env:
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api-secret
+              key: api-key
+        envFrom:
+        - configMapRef:
+            name: gemini-config
+            
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+            
+        # Resource limits
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+            ephemeral-storage: "1Gi"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+            ephemeral-storage: "500Mi"
+            
+        # Volume mounts
+        volumeMounts:
+        - name: gemini-data
+          mountPath: /app/data
+        - name: gemini-logs
+          mountPath: /app/logs
+        - name: gemini-cache
+          mountPath: /app/cache
+        - name: tmp-volume
+          mountPath: /tmp/gemini_api
+          
+        # Health checks
+        livenessProbe:
+          exec:
+            command:
+            - /usr/local/bin/test-writable-dirs.sh
+          initialDelaySeconds: 30
+          periodSeconds: 60
+          timeoutSeconds: 10
+          failureThreshold: 3
+          
+        readinessProbe:
+          exec:
+            command:
+            - /usr/local/bin/test-writable-dirs.sh
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+          
+        # Startup probe for slow initialization
+        startupProbe:
+          exec:
+            command:
+            - /usr/local/bin/test-writable-dirs.sh
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12  # Allow up to 2 minutes for startup
+          
+      # Volumes
+      volumes:
+      - name: gemini-data
+        persistentVolumeClaim:
+          claimName: gemini-data-pvc
+      - name: gemini-logs
+        persistentVolumeClaim:
+          claimName: gemini-logs-pvc
+      - name: gemini-cache
+        emptyDir:
+          sizeLimit: 100Mi
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: 50Mi
+          
+      # Node selection (optional)
+      nodeSelector:
+        kubernetes.io/os: linux
+        
+      # Tolerations for specific nodes (optional)
+      tolerations: []
+      
+      # Affinity rules (optional)
+      affinity: {}
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: gemini-api-service
+  namespace: gemini-api
+  labels:
+    app: gemini-api-handler
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: gemini-api-handler
+
+---
+
+# Optional: Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gemini-api-hpa
+  namespace: gemini-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gemini-api-handler
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

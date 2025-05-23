@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  gemini-api-handler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gemini_api_handler
+    
+    # Environment variables
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - REQUIRED_DIRS=/app/data /app/logs /app/cache /tmp/gemini_api
+      - DEFAULT_PERMS=755
+      - MAX_RETRIES=5
+      - BASE_RETRY_DELAY=15.0
+      
+    # Volume mounts for persistence
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - gemini_cache:/app/cache
+      - /tmp:/tmp
+      
+    # User context for permissions
+    user: "1000:1000"
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+          
+    # Health check
+    healthcheck:
+      test: ["/usr/local/bin/test-writable-dirs.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+      
+    # Restart policy
+    restart: unless-stopped
+    
+    # Network
+    networks:
+      - gemini_network
+
+  # Optional: Add a monitoring/logging service
+  gemini-monitor:
+    image: busybox:latest
+    container_name: gemini_monitor
+    command: tail -f /dev/null
+    volumes:
+      - ./logs:/app/logs:ro
+    networks:
+      - gemini_network
+    profiles:
+      - monitoring
+
+volumes:
+  gemini_cache:
+    driver: local
+
+networks:
+  gemini_network:
+    driver: bridge

@@ -1,0 +1,102 @@
+plugins {
+    id 'checkstyle'
+    id 'pmd'
+    id 'com.github.spotbugs'
+    id 'jacoco'
+}
+
+checkstyle {
+    toolVersion = '8.45.1'
+    configFile = rootProject.file('config/checkstyle/checkstyle.xml')
+    ignoreFailures = false
+}
+
+pmd {
+    toolVersion = '6.55.0'
+    ruleSetFiles = files("${rootProject.projectDir}/config/pmd/ruleset.xml")
+    ignoreFailures = false
+}
+
+spotbugs {
+    toolVersion = '4.7.3'
+    ignoreFailures = false
+    effort = 'max'
+    reportLevel = 'high'
+}
+
+jacoco {
+    toolVersion = '0.8.8'
+}
+
+tasks.withType(Test) {
+    useJUnitPlatform()
+    
+    // Configure JaCoCo coverage
+    finalizedBy jacocoTestReport
+    
+    // Fail if test coverage is below threshold
+    jacocoTestCoverageVerification {
+        violationRules {
+            rule {
+                limit {
+                    minimum = 0.80
+                }
+            }
+        }
+    }
+}
+
+// Define integration test source set
+sourceSets {
+    integrationTest {
+        java {
+            compileClasspath += main.output + test.output
+            runtimeClasspath += main.output + test.output
+            srcDir file('src/integrationTest/java')
+        }
+        resources.srcDir file('src/integrationTest/resources')
+    }
+}
+
+// Create integration test task
+task integrationTest(type: Test) {
+    description = 'Runs integration tests.'
+    group = 'verification'
+    
+    testClassesDirs = sourceSets.integrationTest.output.classesDirs
+    classpath = sourceSets.integrationTest.runtimeClasspath
+    
+    mustRunAfter test
+    
+    // Always run integration tests if requested
+    outputs.upToDateWhen { false }
+}
+
+// Add integration test dependencies configuration
+configurations {
+    integrationTestImplementation.extendsFrom testImplementation
+    integrationTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+// Add OWASP dependency check
+plugins.withId('org.owasp.dependencycheck') {
+    dependencyCheck {
+        failBuildOnCVSS = 7
+        formats = ['HTML', 'JSON']
+    }
+}
+
+// Quality gate task that runs all checks
+task qualityCheck {
+    description = 'Runs all quality checks'
+    group = 'verification'
+    
+    dependsOn tasks.withType(Test)
+    dependsOn tasks.withType(Checkstyle)
+    dependsOn tasks.withType(Pmd)
+    dependsOn tasks.withType(SpotbugsTask)
+    dependsOn jacocoTestCoverageVerification
+    if (plugins.hasPlugin('org.owasp.dependencycheck')) {
+        dependsOn dependencyCheckAnalyze
+    }
+}

@@ -1,0 +1,32 @@
+plugins {
+    id 'com.github.spotbugs' version '5.0.13' apply false
+    id 'org.owasp.dependencycheck' version '8.2.1' apply false
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'buildlogic.quality-conventions'
+    
+    group = 'org.example'
+    version = '1.0.0'
+
+    // Common dependencies for all subprojects
+    dependencies {
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.9.2'
+        testImplementation 'org.mockito:mockito-core:5.3.1'
+        testImplementation 'org.assertj:assertj-core:3.24.2'
+    }
+}
+
+// Root project quality check
+task qualityCheck {
+    description = 'Runs all quality checks across all projects'
+    group = 'verification'
+    
+    dependsOn subprojects.collect { it.tasks.named('qualityCheck') }
+}
